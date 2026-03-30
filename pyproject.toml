@@ -1,0 +1,43 @@
+[project]
+name = "gosuan"
+version = "0.1.0"
+description = "个人玄法算卦/财运/择日(搬迁/动工)工具：命盘计算 + 择日引擎 + 可选AI解读"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "gosuan" }]
+dependencies = [
+  "fastapi>=0.110",
+  "uvicorn[standard]>=0.27",
+  "pydantic>=2.6",
+  "python-dateutil>=2.9",
+  "httpx>=0.27",
+  "lunar-python>=1.4.8",
+]
+
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "ruff>=0.4",
+]
+
+[project.scripts]
+gosuan = "gosuan.cli:main"
+gosuan-api = "gosuan.api:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
