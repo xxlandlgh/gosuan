@@ -23,4 +23,18 @@ def test_daily_fortune_basic_fields():
     assert isinstance(resp.ji, list)
     assert isinstance(resp.good, list)
     assert isinstance(resp.bad, list)
+    assert isinstance(resp.lucky_numbers, list)
+    assert len(resp.lucky_numbers) == 3
+    assert isinstance(resp.lottery_numbers, list)
+    assert len(resp.lottery_numbers) == 6
+    assert isinstance(resp.lottery_recommendations, dict)
+    assert "双色球红球" in resp.lottery_recommendations
+    assert "大乐透前区" in resp.lottery_recommendations
+    assert resp.stock_market_level in {"偏保守", "偏观望", "偏确认"}
+    assert isinstance(resp.stock_preferred_digits, list)
+    assert isinstance(resp.stock_avoid_digits, list)
+    assert isinstance(resp.stock_theme_keywords, list)
+    assert isinstance(resp.stock_avoid_keywords, list)
+    assert isinstance(resp.stock_code_hints, list)
+    assert isinstance(resp.stock_market_note, str)
 

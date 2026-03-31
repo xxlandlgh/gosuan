@@ -120,9 +120,17 @@ def format_wealth_text(name: str, report: WealthReport) -> str:
 
 
 def format_daily_fortune_text(name: str, resp: DailyFortuneResponse) -> str:
+    lottery_lines: list[str] = []
+    for label, nums in (resp.lottery_recommendations or {}).items():
+        lottery_lines.append(f"{label}：{_join_list([str(x) for x in nums], '暂无')}")
+
     lines = [
         f"{name}在 {resp.day.isoformat()} 的个人运势",
         f"生肖：{resp.zodiac} | 日干支：{resp.day_ganzhi} | 建除：{resp.jianchu_12}",
+        f"幸运数字：{_join_list([str(x) for x in resp.lucky_numbers], '暂无')}",
+        f"幸运方位：{resp.lucky_direction or '暂无'}",
+        f"彩票娱乐号：{_join_list([str(x) for x in resp.lottery_numbers], '暂无')}",
+        f"市场观察等级：{resp.stock_market_level or '暂无'}",
         f"黄历宜：{_join_list(resp.yi, '无明显宜项')}",
         f"黄历忌：{_join_list(resp.ji, '无明显忌项')}",
         "",
@@ -141,6 +149,32 @@ def format_daily_fortune_text(name: str, resp: DailyFortuneResponse) -> str:
     if resp.notes:
         lines.extend(["", "补充提醒："])
         lines.extend(f"- {x}" for x in resp.notes)
+    if lottery_lines:
+        lines.extend(["", "分彩种娱乐号："])
+        lines.extend(f"- {x}" for x in lottery_lines)
+    if resp.stock_market_note:
+        lines.extend(["", f"市场观察：{resp.stock_market_note}"])
+    if resp.stock_theme_keywords or resp.stock_avoid_keywords or resp.stock_code_hints:
+        lines.extend(
+            [
+                "",
+                f"偏好数字：{_join_list([str(x) for x in resp.stock_preferred_digits], '暂无')}",
+                f"避忌数字：{_join_list([str(x) for x in resp.stock_avoid_digits], '暂无')}",
+                f"优先观察主题：{_join_list(resp.stock_theme_keywords, '暂无')}",
+                f"尽量回避主题：{_join_list(resp.stock_avoid_keywords, '暂无')}",
+            ]
+        )
+        lines.extend(f"- {x}" for x in resp.stock_code_hints)
+    lines.extend(
+        [
+            "",
+            "依据说明：",
+            "- 幸运方位：优先取当天喜神/财神/福神方位，属于黄历规则解释。",
+            "- 幸运数字：按姓名、出生时间、当天日期生成稳定娱乐号，不是传统黄历原生字段。",
+            "- 彩票娱乐号：按姓名、出生时间、当天日期生成确定性娱乐号，仅供娱乐。",
+            "- 市场观察：结合生肖冲合、建除十二神与黄历交易相关宜忌生成，板块词和数字提示也属于娱乐化观察，不是荐股。",
+        ]
+    )
     return "\n".join(lines)
 
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import random
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
@@ -44,6 +46,91 @@ def _jianchu_12_of_day(solar: "Solar") -> str:
 def _today_in_tz(tz: str) -> date:
     z = ZoneInfo(tz)
     return datetime.now(tz=z).date()
+
+
+def _stable_rng_seed(*parts: str) -> int:
+    text = "|".join(parts)
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    return int(digest[:16], 16)
+
+
+def _daily_entertainment_numbers(
+    *, person_name: str, birth_dt: datetime, day: date
+) -> tuple[list[int], list[int], dict[str, list[int]]]:
+    seed = _stable_rng_seed(person_name, birth_dt.isoformat(), day.isoformat())
+    rng = random.Random(seed)
+    lucky_numbers = sorted(rng.sample(list(range(1, 10)), 3))
+    lottery_numbers = sorted(rng.sample(list(range(1, 34)), 6))
+    lottery_recommendations = {
+        "双色球红球": sorted(rng.sample(list(range(1, 34)), 6)),
+        "双色球蓝球": sorted(rng.sample(list(range(1, 17)), 1)),
+        "大乐透前区": sorted(rng.sample(list(range(1, 36)), 5)),
+        "大乐透后区": sorted(rng.sample(list(range(1, 13)), 2)),
+    }
+    return lucky_numbers, lottery_numbers, lottery_recommendations
+
+
+def _stock_market_outlook(
+    *, chong_person: bool, jianchu: str, yi: list[str], ji: list[str]
+) -> tuple[str, str]:
+    if chong_person or jianchu in {"破", "危", "闭"} or any("交易" in x or "开市" in x for x in ji):
+        level = "偏保守"
+    elif jianchu in {"成", "开", "定"} and any("交易" in x or "立券" in x or "开市" in x for x in yi):
+        level = "偏确认"
+    else:
+        level = "偏观望"
+
+    notes: list[str] = []
+    if chong_person:
+        notes.append("今天更适合观察和等待，不适合按情绪追涨杀跌。")
+    else:
+        notes.append("今天适合先做计划和复盘，再决定是否继续跟踪市场。")
+    if jianchu in {"成", "开", "定"}:
+        notes.append("从节奏上看，偏向确认信号、分批观察，而不是重仓判断。")
+    elif jianchu in {"破", "危", "闭"}:
+        notes.append("从节奏上看，偏向控制风险，避免把短线波动误判成确定机会。")
+    if any("交易" in x or "立券" in x or "开市" in x for x in yi):
+        notes.append("黄历层面有交易相关字样，但这不构成真实买卖建议。")
+    if any("交易" in x or "开市" in x for x in ji):
+        notes.append("黄历层面有交易忌项，今天更适合缩小仓位、减少冲动。")
+    notes.append("仅作娱乐化市场观察，不构成股票买入建议。")
+    return level, "".join(notes[:4])
+
+
+def _stock_focus(
+    *,
+    person_name: str,
+    birth_dt: datetime,
+    day: date,
+    lucky_numbers: list[int],
+    chong_person: bool,
+    jianchu: str,
+) -> tuple[list[int], list[int], list[str], list[str], list[str]]:
+    seed = _stable_rng_seed("stock-focus", person_name, birth_dt.isoformat(), day.isoformat(), jianchu)
+    rng = random.Random(seed)
+    digits = list(range(10))
+    preferred_digits = sorted(set(lucky_numbers + rng.sample(digits, 2)))[:4]
+    avoid_pool = [x for x in digits if x not in preferred_digits]
+    avoid_digits = sorted(rng.sample(avoid_pool, 3))
+
+    if chong_person or jianchu in {"破", "危", "闭"}:
+        preferred_themes_pool = ["高股息", "公用事业", "消费龙头", "央国企", "防御板块"]
+        avoid_themes_pool = ["高波动题材", "连板炒作", "纯概念小票", "高杠杆品种", "追涨热点"]
+    elif jianchu in {"成", "开", "定"}:
+        preferred_themes_pool = ["业绩兑现", "现金流稳健", "景气上行", "趋势确认", "龙头板块"]
+        avoid_themes_pool = ["情绪退潮", "无量拉升", "题材末端", "高位博弈", "消息兑现后回落"]
+    else:
+        preferred_themes_pool = ["业绩预增", "估值修复", "低位放量", "行业龙头", "顺周期"]
+        avoid_themes_pool = ["高位分歧", "壳概念", "单日异动", "题材轮动末端", "短线透支"]
+
+    preferred_themes = rng.sample(preferred_themes_pool, 3)
+    avoid_themes = rng.sample(avoid_themes_pool, 3)
+    code_hints = [
+        f"可优先留意代码中含 {preferred_digits[0]}、{preferred_digits[1]} 的标的",
+        f"若必须二选一，可先避开尾号带 {avoid_digits[0]}、{avoid_digits[1]} 的标的",
+        f"更适合看代码结构清晰、重复数字较少的标的；少碰连续同尾号过多的票",
+    ]
+    return preferred_digits, avoid_digits, preferred_themes, avoid_themes, code_hints
 
 
 def _personalize_good_bad(
@@ -133,6 +220,32 @@ def daily_fortune(req: DailyFortuneRequest) -> DailyFortuneResponse:
 
     go_directions = [x for x in [pos_xi, pos_cai, pos_fu] if x]
     avoid_directions = [x for x in [pos_taisui] if x]
+    lucky_direction = go_directions[0] if go_directions else None
+    lucky_numbers, lottery_numbers, lottery_recommendations = _daily_entertainment_numbers(
+        person_name=person.name,
+        birth_dt=person.birth_dt,
+        day=d,
+    )
+    stock_market_level, stock_market_note = _stock_market_outlook(
+        chong_person=chong_person,
+        jianchu=jianchu,
+        yi=yi,
+        ji=ji,
+    )
+    (
+        stock_preferred_digits,
+        stock_avoid_digits,
+        stock_theme_keywords,
+        stock_avoid_keywords,
+        stock_code_hints,
+    ) = _stock_focus(
+        person_name=person.name,
+        birth_dt=person.birth_dt,
+        day=d,
+        lucky_numbers=lucky_numbers,
+        chong_person=chong_person,
+        jianchu=jianchu,
+    )
 
     good, bad, notes = _personalize_good_bad(
         yi=yi,
@@ -166,6 +279,17 @@ def daily_fortune(req: DailyFortuneRequest) -> DailyFortuneResponse:
         "pos_cai": pos_cai,
         "pos_fu": pos_fu,
         "pos_taisui": pos_taisui,
+        "lucky_numbers": lucky_numbers,
+        "lottery_numbers": lottery_numbers,
+        "lottery_recommendations": lottery_recommendations,
+        "lucky_direction": lucky_direction,
+        "stock_market_level": stock_market_level,
+        "stock_preferred_digits": stock_preferred_digits,
+        "stock_avoid_digits": stock_avoid_digits,
+        "stock_theme_keywords": stock_theme_keywords,
+        "stock_avoid_keywords": stock_avoid_keywords,
+        "stock_code_hints": stock_code_hints,
+        "stock_market_note": stock_market_note,
     }
 
     return DailyFortuneResponse(
@@ -181,6 +305,17 @@ def daily_fortune(req: DailyFortuneRequest) -> DailyFortuneResponse:
         bad=bad,
         go_directions=go_directions,
         avoid_directions=avoid_directions,
+        lucky_numbers=lucky_numbers,
+        lucky_direction=lucky_direction,
+        lottery_numbers=lottery_numbers,
+        lottery_recommendations=lottery_recommendations,
+        stock_market_level=stock_market_level,
+        stock_preferred_digits=stock_preferred_digits,
+        stock_avoid_digits=stock_avoid_digits,
+        stock_theme_keywords=stock_theme_keywords,
+        stock_avoid_keywords=stock_avoid_keywords,
+        stock_code_hints=stock_code_hints,
+        stock_market_note=stock_market_note,
         notes=notes,
         raw=raw,
     )

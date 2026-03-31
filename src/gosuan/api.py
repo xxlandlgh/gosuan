@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from collections import defaultdict
 from datetime import date, datetime
+from threading import Lock
 
 import uvicorn
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse
 
 from .bazi import build_bazi_chart
@@ -33,6 +35,34 @@ from .wealth import build_wealth_report
 
 
 app = FastAPI(title="gosuan", version="0.1.0")
+AI_RATE_LIMIT_PER_HOUR = 5
+_AI_USAGE_LOCK = Lock()
+_AI_USAGE_COUNTERS: dict[str, int] = defaultdict(int)
+
+
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _ai_subject_key(request: Request, person: PersonProfile | None = None) -> str:
+    ip = _client_ip(request)
+    if person:
+        return f"{person.name.strip()}|{person.birth_dt.isoformat()}|{ip}"
+    return f"anonymous|{ip}"
+
+
+def _consume_ai_quota(request: Request, person: PersonProfile | None = None) -> None:
+    hour_bucket = datetime.now().strftime("%Y-%m-%d-%H")
+    subject = _ai_subject_key(request, person)
+    counter_key = f"{hour_bucket}|{subject}"
+    with _AI_USAGE_LOCK:
+        current = _AI_USAGE_COUNTERS.get(counter_key, 0)
+        if current >= AI_RATE_LIMIT_PER_HOUR:
+            raise HTTPException(
+                status_code=429,
+                detail=f"当前账号 1 小时内 AI 调用次数已用完（{AI_RATE_LIMIT_PER_HOUR}/{AI_RATE_LIMIT_PER_HOUR}），请稍后再试。",
+            )
+        _AI_USAGE_COUNTERS[counter_key] = current + 1
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -552,6 +582,21 @@ def home():
           <div class="card-lead">把基础资料录完整后，下面所有模块都能直接复用，不需要重复填写。</div>
           <div class="row two">
             <div>
+              <label>最近使用档案</label>
+              <select id="profileHistory">
+                <option value="">当前浏览器 / 当前 IP 暂无历史档案</option>
+              </select>
+            </div>
+            <div>
+              <label>档案操作</label>
+              <div class="btns" style="margin-top: 0;">
+                <button class="secondary" onclick="saveCurrentArchive(true)">保存当前档案</button>
+                <button class="secondary" onclick="clearProfileArchives()">清空缓存</button>
+              </div>
+            </div>
+          </div>
+          <div class="row two">
+            <div>
               <label>称呼</label>
               <input id="name" placeholder="例如：张三" value="张三" />
             </div>
@@ -826,10 +871,24 @@ def home():
         if (!fday.value) fday.value = nowDateISO();
       }
       initDefaults();
+      let storageScopeKey = "browser";
+      const MAX_ARCHIVES = 8;
+      function scopedStorageKey(baseKey) {
+        return `${baseKey}:${storageScopeKey}`;
+      }
+      async function loadClientContext() {
+        try {
+          const resp = await fetch("/client-context");
+          const data = await resp.json();
+          if (data && data.client_ip) {
+            storageScopeKey = `ip:${data.client_ip}`;
+          }
+        } catch (err) {}
+      }
 
       function loadProfileCache() {
         try {
-          const raw = window.localStorage.getItem("gosuan.profile");
+          const raw = window.localStorage.getItem(scopedStorageKey("gosuan.profile"));
           if (!raw) return;
           const data = JSON.parse(raw);
           if (data.name) document.getElementById("name").value = data.name;
@@ -840,16 +899,10 @@ def home():
       }
       function saveProfileCache() {
         try {
-          const data = {
-            name: document.getElementById("name").value,
-            gender: document.getElementById("gender").value,
-            birth_dt: document.getElementById("birth").value,
-            tz: document.getElementById("tz").value,
-          };
-          window.localStorage.setItem("gosuan.profile", JSON.stringify(data));
+          const data = collectProfileCacheData();
+          window.localStorage.setItem(scopedStorageKey("gosuan.profile"), JSON.stringify(data));
         } catch (err) {}
       }
-      loadProfileCache();
       ["name", "gender", "birth", "tz"].forEach(function(id) {
         var el = document.getElementById(id);
         if (!el) return;
@@ -858,7 +911,7 @@ def home():
       });
       function loadMoveCache() {
         try {
-          const raw = window.localStorage.getItem("gosuan.moveProfile");
+          const raw = window.localStorage.getItem(scopedStorageKey("gosuan.moveProfile"));
           if (!raw) return;
           const data = JSON.parse(raw);
           if (data.house_orientation) document.getElementById("houseOrientation").value = data.house_orientation;
@@ -871,23 +924,123 @@ def home():
       }
       function saveMoveCache() {
         try {
-          const data = {
-            house_orientation: document.getElementById("houseOrientation").value,
-            door_orientation: document.getElementById("doorOrientation").value,
-            house_owner_name: document.getElementById("houseOwnerName").value,
-            house_owner_birth: document.getElementById("houseOwnerBirth").value,
-            co_resident_notes: document.getElementById("coResidentNotes").value,
-            move_time_window: document.getElementById("moveTimeWindow").value,
-          };
-          window.localStorage.setItem("gosuan.moveProfile", JSON.stringify(data));
+          const data = collectMoveCacheData();
+          window.localStorage.setItem(scopedStorageKey("gosuan.moveProfile"), JSON.stringify(data));
         } catch (err) {}
       }
-      loadMoveCache();
+      function collectProfileCacheData() {
+        return {
+          name: document.getElementById("name").value,
+          gender: document.getElementById("gender").value,
+          birth_dt: document.getElementById("birth").value,
+          tz: document.getElementById("tz").value,
+        };
+      }
+      function collectMoveCacheData() {
+        return {
+          house_orientation: document.getElementById("houseOrientation").value,
+          door_orientation: document.getElementById("doorOrientation").value,
+          house_owner_name: document.getElementById("houseOwnerName").value,
+          house_owner_birth: document.getElementById("houseOwnerBirth").value,
+          co_resident_notes: document.getElementById("coResidentNotes").value,
+          move_time_window: document.getElementById("moveTimeWindow").value,
+        };
+      }
+      function getArchiveHistory() {
+        try {
+          const raw = window.localStorage.getItem(scopedStorageKey("gosuan.profileHistory"));
+          const data = raw ? JSON.parse(raw) : [];
+          return Array.isArray(data) ? data : [];
+        } catch (err) {
+          return [];
+        }
+      }
+      function archiveLabel(item) {
+        const base = item && item.profile ? item.profile : {};
+        const name = base.name || "未命名";
+        const birth = base.birth_dt || "未填生日";
+        return `${name}｜${birth}`;
+      }
+      function renderProfileHistory() {
+        const select = document.getElementById("profileHistory");
+        if (!select) return;
+        const archives = getArchiveHistory();
+        const options = ['<option value="">选择历史档案并自动带出</option>'];
+        archives.forEach((item, idx) => {
+          options.push(`<option value="${idx}">${escapeHtml(archiveLabel(item))}</option>`);
+        });
+        select.innerHTML = options.join("");
+      }
+      function applyArchiveItem(item) {
+        if (!item) return;
+        const profile = item.profile || {};
+        const move = item.move || {};
+        if (profile.name != null) document.getElementById("name").value = profile.name;
+        if (profile.gender) document.getElementById("gender").value = profile.gender;
+        if (profile.birth_dt != null) document.getElementById("birth").value = profile.birth_dt;
+        if (profile.tz != null) document.getElementById("tz").value = profile.tz;
+        if (move.house_orientation != null) document.getElementById("houseOrientation").value = move.house_orientation;
+        if (move.door_orientation != null) document.getElementById("doorOrientation").value = move.door_orientation;
+        if (move.house_owner_name != null) document.getElementById("houseOwnerName").value = move.house_owner_name;
+        if (move.house_owner_birth != null) document.getElementById("houseOwnerBirth").value = move.house_owner_birth;
+        if (move.co_resident_notes != null) document.getElementById("coResidentNotes").value = move.co_resident_notes;
+        if (move.move_time_window != null) document.getElementById("moveTimeWindow").value = move.move_time_window;
+        saveProfileCache();
+        saveMoveCache();
+      }
+      function saveCurrentArchive(showFeedback) {
+        try {
+          const profile = collectProfileCacheData();
+          const move = collectMoveCacheData();
+          if (!profile.name && !profile.birth_dt) return;
+          const archive = {
+            key: `${profile.name || ""}|${profile.gender || ""}|${profile.birth_dt || ""}|${storageScopeKey}`,
+            profile,
+            move,
+            updated_at: new Date().toISOString(),
+          };
+          const archives = getArchiveHistory().filter(item => item && item.key !== archive.key);
+          archives.unshift(archive);
+          window.localStorage.setItem(
+            scopedStorageKey("gosuan.profileHistory"),
+            JSON.stringify(archives.slice(0, MAX_ARCHIVES))
+          );
+          renderProfileHistory();
+          if (showFeedback) showToast("当前档案已保存");
+        } catch (err) {
+          if (showFeedback) showToast("保存档案失败");
+        }
+      }
+      function clearProfileArchives() {
+        try {
+          window.localStorage.removeItem(scopedStorageKey("gosuan.profile"));
+          window.localStorage.removeItem(scopedStorageKey("gosuan.moveProfile"));
+          window.localStorage.removeItem(scopedStorageKey("gosuan.profileHistory"));
+          document.getElementById("profileHistory").innerHTML = '<option value="">当前浏览器 / 当前 IP 暂无历史档案</option>';
+          showToast("当前 IP 下的缓存已清空");
+        } catch (err) {
+          showToast("清空缓存失败");
+        }
+      }
       ["houseOrientation", "doorOrientation", "houseOwnerName", "houseOwnerBirth", "coResidentNotes", "moveTimeWindow"].forEach(function(id) {
         var el = document.getElementById(id);
         if (!el) return;
         el.addEventListener("change", saveMoveCache);
         el.addEventListener("blur", saveMoveCache);
+      });
+      document.getElementById("profileHistory").addEventListener("change", function(e) {
+        const value = e && e.target ? e.target.value : "";
+        if (value === "") return;
+        const archives = getArchiveHistory();
+        const item = archives[Number(value)];
+        if (!item) return;
+        applyArchiveItem(item);
+        showToast("历史档案已带出");
+      });
+      loadClientContext().finally(function() {
+        loadProfileCache();
+        loadMoveCache();
+        renderProfileHistory();
       });
 
       async function loadAiStatus() {
@@ -1065,6 +1218,7 @@ def home():
         wrap.classList.remove("is-loading");
         wrap.classList.remove("error");
         const data = payload.data || {};
+        const dailyCtx = data.structure && data.structure.daily_wealth_context ? data.structure.daily_wealth_context : {};
         const suggestions = data.suggestions || [];
         const cautions = data.cautions || [];
         const html = [
@@ -1072,10 +1226,16 @@ def home():
           `<div class="summary-grid">`,
           `<div class="summary-chip"><b>概览</b><span>${escapeHtml((data.overview || "未生成概览").slice(0, 36) || "未生成概览")}</span></div>`,
           `<div class="summary-chip"><b>AI 解读</b><span>${data.ai_text ? "已生成" : "未启用 / 未生成"}</span></div>`,
+          `<div class="summary-chip"><b>当天财位</b><span>${escapeHtml(dailyCtx.wealth_direction || "暂无")}</span></div>`,
+          `<div class="summary-chip"><b>股票偏好数字</b><span>${escapeHtml(listText(dailyCtx.stock_preferred_digits, "暂无"))}</span></div>`,
           `</div>`,
           `<div class="two-col-list">`,
           `<div class="note-box"><h4>适合优先做的事</h4>${suggestions.length ? suggestions.map(x => `<div class="mini-item">${escapeHtml(x)}</div>`).join("") : `<div class="mini-item">暂无明显建议。</div>`}</div>`,
           `<div class="note-box"><h4>需要特别留意</h4>${cautions.length ? cautions.map(x => `<div class="mini-item">${escapeHtml(x)}</div>`).join("") : `<div class="mini-item">当前没有特别突出的风险提示。</div>`}</div>`,
+          `</div>`,
+          `<div class="two-col-list">`,
+          `<div class="note-box"><h4>当天财位与处理</h4><div class="mini-item"><strong>财位：</strong>${escapeHtml(dailyCtx.wealth_direction || "暂无")}</div><div class="mini-item"><strong>辅助方位：</strong>${escapeHtml(listText(dailyCtx.support_directions, "暂无"))}</div><div class="mini-item"><strong>回避方位：</strong>${escapeHtml(listText(dailyCtx.avoid_directions, "暂无"))}</div><div class="mini-item">若人在非财位，先做复盘、沟通、信息收集和小额安排，少做重决策。</div></div>`,
+          `<div class="note-box"><h4>股票 / 彩票偏向</h4><div class="mini-item"><strong>股票偏好数字：</strong>${escapeHtml(listText(dailyCtx.stock_preferred_digits, "暂无"))}</div><div class="mini-item"><strong>股票避忌数字：</strong>${escapeHtml(listText(dailyCtx.stock_avoid_digits, "暂无"))}</div><div class="mini-item"><strong>股票优先关键词：</strong>${escapeHtml(listText(dailyCtx.stock_theme_keywords, "暂无"))}</div><div class="mini-item"><strong>股票回避关键词：</strong>${escapeHtml(listText(dailyCtx.stock_avoid_keywords, "暂无"))}</div><div class="mini-item"><strong>彩票通用号：</strong>${escapeHtml(listText(dailyCtx.lottery_numbers, "暂无"))}</div></div>`,
           `</div>`,
         ];
         if (data.ai_text) {
@@ -1094,18 +1254,32 @@ def home():
         const good = data.good || [];
         const bad = data.bad || [];
         const notes = data.notes || [];
+        const stockThemes = data.stock_theme_keywords || [];
+        const stockAvoidThemes = data.stock_avoid_keywords || [];
+        const stockCodeHints = data.stock_code_hints || [];
+        const lotteryRecs = data.lottery_recommendations || {};
+        const lotteryItems = Object.entries(lotteryRecs).map(([label, nums]) =>
+          `<div class="mini-item"><strong>${escapeHtml(label)}：</strong>${escapeHtml(listText(nums, "暂无"))}</div>`
+        ).join("");
         wrap.innerHTML = [
           `<div class="result-title">${escapeHtml(payload.title || "个人运势")}</div>`,
           `<div class="summary-grid">`,
           `<div class="summary-chip"><b>日期</b><span>${escapeHtml(data.day || "-")}</span></div>`,
           `<div class="summary-chip"><b>日况</b><span>${escapeHtml(`${data.day_ganzhi || "-"} · ${data.jianchu_12 || "-"}`)}</span></div>`,
-          `<div class="summary-chip"><b>适合去的方位</b><span>${escapeHtml(listText(data.go_directions, "按实际安排"))}</span></div>`,
-          `<div class="summary-chip"><b>尽量回避</b><span>${escapeHtml(listText(data.avoid_directions, "暂无特别提示"))}</span></div>`,
+          `<div class="summary-chip"><b>幸运数字</b><span>${escapeHtml(listText(data.lucky_numbers, "暂无"))}</span></div>`,
+          `<div class="summary-chip"><b>幸运方位</b><span>${escapeHtml(data.lucky_direction || listText(data.go_directions, "按实际安排"))}</span></div>`,
+          `<div class="summary-chip"><b>市场观察</b><span>${escapeHtml(data.stock_market_level || "暂无")}</span></div>`,
+          `<div class="summary-chip"><b>生肖</b><span>${escapeHtml(data.zodiac || "-")}</span></div>`,
           `</div>`,
           `<div class="two-col-list">`,
           `<div class="note-box"><h4>今天更适合</h4>${good.length ? good.map(x => `<div class="mini-item">${escapeHtml(x)}</div>`).join("") : `<div class="mini-item">暂无特别突出的加分事项。</div>`}</div>`,
           `<div class="note-box"><h4>今天尽量避开</h4>${bad.length ? bad.map(x => `<div class="mini-item">${escapeHtml(x)}</div>`).join("") : `<div class="mini-item">暂无特别明确的避坑项。</div>`}</div>`,
           `</div>`,
+          `<div class="two-col-list">`,
+          `<div class="note-box"><h4>彩票娱乐号</h4><div class="mini-item"><strong>通用号：</strong>${escapeHtml(listText(data.lottery_numbers, "暂无"))}</div>${lotteryItems || `<div class="mini-item">暂无分彩种模板。</div>`}<div class="mini-item">仅供娱乐，不代表真实中奖概率。</div></div>`,
+          `<div class="note-box"><h4>市场观察（非投资建议）</h4><div class="mini-item"><strong>等级：</strong>${escapeHtml(data.stock_market_level || "暂无")}</div><div class="mini-item"><strong>偏好数字：</strong>${escapeHtml(listText(data.stock_preferred_digits, "暂无"))}</div><div class="mini-item"><strong>避忌数字：</strong>${escapeHtml(listText(data.stock_avoid_digits, "暂无"))}</div><div class="mini-item"><strong>优先观察主题：</strong>${escapeHtml(listText(stockThemes, "暂无"))}</div><div class="mini-item"><strong>尽量回避主题：</strong>${escapeHtml(listText(stockAvoidThemes, "暂无"))}</div>${stockCodeHints.map(x => `<div class="mini-item">${escapeHtml(x)}</div>`).join("")}<div class="mini-item">${escapeHtml(data.stock_market_note || "暂无")}</div></div>`,
+          `</div>`,
+          `<div class="result-block"><div class="result-line">依据说明</div><div class="result-bullet">幸运方位：优先取当天喜神 / 财神 / 福神方位，属于黄历规则解释。</div><div class="result-bullet">幸运数字：按姓名、出生时间、当天日期生成稳定娱乐号，不是传统黄历原生字段。</div><div class="result-bullet">彩票娱乐号：按姓名、出生时间、当天日期生成确定性娱乐号，仅供娱乐。</div><div class="result-bullet">市场观察：结合生肖冲合、建除十二神与黄历交易相关宜忌生成；数字、主题词和代码形态提示也只是娱乐化观察，不是具体荐股。</div></div>`,
           notes.length ? `<div class="result-block"><div class="result-line">补充提醒</div>${notes.map(x => `<div class="result-bullet">${escapeHtml(x)}</div>`).join("")}</div>` : "",
         ].join("");
         appendActionRow("out-daily", `${payload.title || ""}\\n${payload.summary || ""}`.trim());
@@ -1226,6 +1400,11 @@ def home():
         const lines = [
           `${name}在 ${data.day} 的个人运势`,
           `生肖：${data.zodiac} | 日干支：${data.day_ganzhi} | 建除：${data.jianchu_12}`,
+          `幸运数字：${listText(data.lucky_numbers, "暂无")}`,
+          `幸运方位：${data.lucky_direction || listText(data.go_directions, "按实际安排")}`,
+          `市场观察等级：${data.stock_market_level || "暂无"}`,
+          `偏好数字：${listText(data.stock_preferred_digits, "暂无")}`,
+          `避忌数字：${listText(data.stock_avoid_digits, "暂无")}`,
           `黄历宜：${listText(data.yi, "无明显宜项")}`,
           `黄历忌：${listText(data.ji, "无明显忌项")}`,
           "",
@@ -1238,6 +1417,16 @@ def home():
         if (!data.bad || !data.bad.length) lines.push("- 暂无特别明确的避坑项。");
         lines.push("", `适合去的方位：${listText(data.go_directions, "可按实际行程安排")}`);
         lines.push(`尽量回避的方位：${listText(data.avoid_directions, "暂无特别提示")}`);
+        lines.push(`彩票娱乐号：${listText(data.lottery_numbers, "暂无")}`);
+        if (data.lottery_recommendations) {
+          Object.entries(data.lottery_recommendations).forEach(([label, nums]) => {
+            lines.push(`${label}：${listText(nums, "暂无")}`);
+          });
+        }
+        if (data.stock_theme_keywords) lines.push(`优先观察主题：${listText(data.stock_theme_keywords, "暂无")}`);
+        if (data.stock_avoid_keywords) lines.push(`尽量回避主题：${listText(data.stock_avoid_keywords, "暂无")}`);
+        if (data.stock_code_hints) data.stock_code_hints.forEach(x => lines.push(`- ${x}`));
+        if (data.stock_market_note) lines.push(`市场观察：${data.stock_market_note}`);
         if (data.notes && data.notes.length) {
           lines.push("", "补充提醒：");
           data.notes.forEach(x => lines.push(`- ${x}`));
@@ -1263,6 +1452,7 @@ def home():
       async function runBazi() {
         try {
           const person = getPerson();
+          saveCurrentArchive(false);
           setLoading("out-bazi", "正在生成八字命盘…");
           const data = await postJSON("/bazi?pretty_cn=true", person);
           renderBaziResult(data);
@@ -1272,6 +1462,7 @@ def home():
       async function runWealth() {
         try {
           const person = getPerson();
+          saveCurrentArchive(false);
           setLoading("out-wealth", "正在整理财运结构与建议…");
           const ai = document.getElementById("wealth-ai").value;
           const model = document.getElementById("wealth-model").value.trim();
@@ -1286,11 +1477,16 @@ def home():
 
       async function probeAi() {
         try {
+          const person = getPerson();
           setLoading("out-wealth", "正在检查 AI 连接…");
           const model = document.getElementById("wealth-model").value.trim();
           const qs = new URLSearchParams();
           if (model) qs.set("model", model);
-          const resp = await fetch(`/ai-probe?${qs.toString()}`, { method: "POST" });
+          const resp = await fetch(`/ai-probe?${qs.toString()}`, {
+            method: "POST",
+            headers: {"Content-Type":"application/json"},
+            body: JSON.stringify(person),
+          });
           const data = await resp.json();
           if (!resp.ok) throw new Error(data.detail || "AI 连接检测失败");
           renderSimpleCard("out-wealth", "AI 连接检测", data.message);
@@ -1300,6 +1496,7 @@ def home():
       async function runSelect() {
         try {
           const person = getPerson();
+          saveCurrentArchive(false);
           setLoading("out-select", "正在筛选候选吉日…");
           const purpose = document.getElementById("purpose").value;
           const school = document.getElementById("school").value;
@@ -1341,6 +1538,7 @@ def home():
       async function runDivine() {
         try {
           const person = getPerson();
+          saveCurrentArchive(false);
           setLoading("out-divine", "正在起卦，请稍候…");
           const qtime = document.getElementById("qtime").value;
           const personalSeed = document.getElementById("personalSeed").value === "true";
@@ -1358,6 +1556,7 @@ def home():
       async function runDailyFortune() {
         try {
           const person = getPerson();
+          saveCurrentArchive(false);
           setLoading("out-daily", "正在测算今日运势…");
           const day = document.getElementById("fday").value;
           const body = {
@@ -1381,6 +1580,11 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/client-context")
+def client_context(request: Request) -> dict[str, str]:
+    return {"client_ip": _client_ip(request)}
+
+
 @app.get("/ai-status")
 def ai_status() -> dict[str, object]:
     cfg = ai_config_from_env()
@@ -1395,8 +1599,9 @@ def ai_status() -> dict[str, object]:
 
 
 @app.post("/ai-probe")
-def ai_probe(model: str | None = None) -> dict[str, str]:
+def ai_probe(request: Request, person: PersonProfile | None = None, model: str | None = None) -> dict[str, str]:
     try:
+        _consume_ai_quota(request, person)
         cfg = ai_config_from_env()
         cfg.enabled = True
         if model:
@@ -1405,6 +1610,8 @@ def ai_probe(model: str | None = None) -> dict[str, str]:
 
         res = generate_ai_text(prompt="请只回复“连接正常”。", ai=cfg)
         return {"message": f"连接成功。\n当前模型：{cfg.model}\n模型回复：{res.text.strip()}"}
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 
@@ -1425,10 +1632,17 @@ def api_bazi(person: PersonProfile, pretty_cn: bool = False):
 
 
 @app.post("/wealth")
-def api_wealth(person: PersonProfile, ai: bool = False, model: str | None = None, pretty_cn: bool = False):
+def api_wealth(
+    request: Request,
+    person: PersonProfile,
+    ai: bool = False,
+    model: str | None = None,
+    pretty_cn: bool = False,
+):
     try:
         cfg: AiConfig | None = None
         if ai:
+            _consume_ai_quota(request, person)
             cfg = ai_config_from_env()
             cfg.enabled = True
             if model:
@@ -1441,6 +1655,8 @@ def api_wealth(person: PersonProfile, ai: bool = False, model: str | None = None
             "summary": format_wealth_text(person.name, report),
             "data": report.model_dump(),
         }
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
 

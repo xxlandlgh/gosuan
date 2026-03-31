@@ -13,7 +13,7 @@ from gosuan.format_cn import (
 )
 from gosuan.meihua import meihua_divination
 from gosuan.models import DailyFortuneRequest, DateSchool, Gender, PersonProfile, Purpose
-from gosuan.wealth import build_wealth_report
+from gosuan.wealth import _build_wealth_prompt, build_wealth_report
 
 
 def _person() -> PersonProfile:
@@ -41,6 +41,17 @@ def test_format_wealth_text_contains_sections():
     assert "财运结构简报" in text
     assert "适合优先做的事" in text
     assert "需要特别留意" in text
+
+
+def test_build_wealth_prompt_enforces_fixed_sections():
+    person = _person()
+    report = build_wealth_report(person)
+    prompt = _build_wealth_prompt(person, report)
+    assert "一、股票偏好" in prompt
+    assert "二、彩票偏好" in prompt
+    assert "三、财位处理" in prompt
+    assert "四、今日忌讳" in prompt
+    assert "只能输出上述四个一级标题" in prompt
 
 
 def test_format_daily_fortune_text_contains_sections():
