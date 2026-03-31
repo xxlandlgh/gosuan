@@ -393,7 +393,7 @@ def home():
       .quick-nav {
         display: flex;
         gap: 10px;
-        flex-wrap: wrap;
+        flex-wrap: nowrap;
         margin: 16px 0 6px;
         position: sticky;
         top: 10px;
@@ -403,8 +403,14 @@ def home():
         background: rgba(7, 17, 31, 0.68);
         backdrop-filter: blur(14px);
         border: 1px solid rgba(255,255,255,0.08);
+        overflow-x: auto;
+        overflow-y: hidden;
+        -webkit-overflow-scrolling: touch;
+        scrollbar-width: none;
       }
+      .quick-nav::-webkit-scrollbar { display: none; }
       .quick-link {
+        flex: 0 0 auto;
         padding: 9px 14px;
         border-radius: 999px;
         background: rgba(255,255,255,0.05);
@@ -491,6 +497,130 @@ def home():
       .toast.show {
         opacity: 1;
         transform: translateY(0);
+      }
+      @media (max-width: 820px) {
+        .wrap {
+          padding: 14px 12px 44px;
+        }
+        .topbar {
+          flex-direction: column;
+          align-items: stretch;
+        }
+        .brand {
+          font-size: 24px;
+        }
+        .hero {
+          margin-top: 14px;
+          padding: 18px;
+          border-radius: 22px;
+        }
+        .hero h1 {
+          margin: 12px 0 10px;
+          font-size: clamp(28px, 9vw, 42px);
+        }
+        .hero p {
+          font-size: 14px;
+          line-height: 1.75;
+        }
+        .hero-stats {
+          grid-template-columns: 1fr;
+        }
+        .section-head {
+          flex-direction: column;
+          align-items: flex-start;
+          margin: 20px 0 10px;
+        }
+        .section-head h2 {
+          font-size: 20px;
+        }
+        .section-head p {
+          max-width: none;
+        }
+        .card {
+          padding: 14px;
+          border-radius: 20px;
+        }
+        .card h2 {
+          font-size: 17px;
+        }
+        .btns {
+          gap: 8px;
+        }
+        button,
+        .ghost-btn {
+          width: 100%;
+          justify-content: center;
+          text-align: center;
+        }
+        .out {
+          min-height: 96px;
+          max-height: none;
+          overflow: visible;
+          font-size: 13px;
+          line-height: 1.65;
+        }
+        .summary-grid {
+          grid-template-columns: 1fr;
+        }
+        .candidate-top {
+          flex-direction: column;
+          align-items: flex-start;
+        }
+        .pillar-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+        .action-row {
+          justify-content: stretch;
+        }
+        .toast {
+          left: 12px;
+          right: 12px;
+          bottom: 12px;
+        }
+      }
+      @media (max-width: 520px) {
+        .wrap {
+          padding: 10px 10px 32px;
+        }
+        .hero {
+          padding: 16px 14px;
+        }
+        .eyebrow,
+        .pill,
+        .quick-link {
+          font-size: 11px;
+        }
+        .sub,
+        .card-lead,
+        .hint,
+        .candidate-tagline,
+        .mini-item,
+        .result-line,
+        .result-bullet {
+          font-size: 12px;
+        }
+        input, select, textarea {
+          padding: 12px;
+          font-size: 16px;
+        }
+        .summary-chip {
+          padding: 10px 12px;
+        }
+        .summary-chip span {
+          font-size: 14px;
+        }
+        .candidate-date {
+          font-size: 16px;
+        }
+        .candidate-card,
+        .note-box,
+        .result-block,
+        .pillar-card {
+          border-radius: 14px;
+        }
+        .pillar-card span {
+          font-size: 20px;
+        }
       }
       @keyframes shimmer {
         from { transform: translateX(-100%); }
