@@ -140,6 +140,42 @@ GET /ai-status
 
 用来查看当前服务是否已经读到 AI 配置，以及当前模型名。
 
+## 生产部署
+
+仓库内已提供 Linux 生产部署脚本：
+
+- [deploy/linux_prod_setup.sh](D:/gitProject/gosuan/deploy/linux_prod_setup.sh)
+- [deploy/DEPLOY_PROD.md](D:/gitProject/gosuan/deploy/DEPLOY_PROD.md)
+
+典型部署方式：
+
+```bash
+git clone https://github.com/xxlandlgh/gosuan.git
+cd gosuan
+chmod +x deploy/linux_prod_setup.sh
+sudo APP_DIR=/opt/gosuan \
+APP_NAME=gosuan \
+APP_USER=root \
+BRANCH=main \
+DOMAIN=your-domain.com \
+GOSUAN_AI_ENABLED=true \
+GOSUAN_AI_BASE_URL=https://ark.cn-beijing.volces.com/api/v3 \
+GOSUAN_AI_MODEL=doubao-seed-2-0-code-preview-260215 \
+GOSUAN_AI_API_KEY=你的Key \
+bash deploy/linux_prod_setup.sh
+```
+
+脚本会自动完成：
+
+- 安装系统依赖
+- 拉代码 / 更新代码
+- 创建虚拟环境
+- 安装 Python 依赖
+- 写入 `.env.local`
+- 注册 `systemd`
+- 配置 `nginx`
+- 启动并健康检查
+
 ## 测试
 
 ```bash
